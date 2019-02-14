@@ -112,6 +112,51 @@ export function getWidget(schema, widget, registeredWidgets = {}) {
   throw new Error(`No widget "${widget}" for type "${type}"`);
 }
 
+// detects whether a definition references itself recursively
+function isCyclic($ref, definitions) {
+  const rootSchema = findSchemaDefinition($ref, definitions);
+  const traversedDefinitions = {};
+  traversedDefinitions[$ref] = true;
+
+  const recurse = schema => {
+    if ("$ref" in schema) {
+      if (traversedDefinitions[schema.$ref]) {
+        return true;
+      }
+      traversedDefinitions[schema.$ref] = true;
+      const refSchema = findSchemaDefinition(schema.$ref, definitions);
+      return recurse(refSchema);
+    }
+
+    switch (schema.type) {
+      case "object":
+        if (!schema.properties) {
+          return false;
+        }
+        // true true false
+        return Object.keys(schema.properties).reduce((acc, key) => {
+          console.log("looping over: ", key, schema.properties[key]);
+          return acc && recurse(schema.properties[key]);
+        }, true);
+
+      case "array":
+        if (!schema.items.length) {
+          return false;
+        }
+        return schema.items
+          .map(item => {
+            return recurse(item);
+          })
+          .reduce((total, key) => {
+            return total && key;
+          }, true);
+    }
+    return false;
+  };
+
+  return recurse(rootSchema);
+}
+
 function computeDefaults(schema, parentDefaults, definitions = {}) {
   // Compute the defaults recursively: give highest priority to deepest nodes.
   let defaults = parentDefaults;
@@ -125,6 +170,9 @@ function computeDefaults(schema, parentDefaults, definitions = {}) {
   } else if ("$ref" in schema) {
     // Use referenced schema defaults for this node.
     const refSchema = findSchemaDefinition(schema.$ref, definitions);
+    if (isCyclic(schema.$ref, definitions)) {
+      return undefined;
+    }
     return computeDefaults(refSchema, defaults, definitions);
   } else if (isFixedItems(schema)) {
     defaults = schema.items.map(itemSchema =>
